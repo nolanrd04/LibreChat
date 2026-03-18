@@ -23,6 +23,8 @@ import { useChatContext, useChatFormContext } from '~/Providers';
 import { useGetAgentByIdQuery } from '~/data-provider';
 import store from '~/store';
 
+const PENDING_INSERT_STORAGE_KEY = 'prompthub_pending_insert';
+
 /**
  * Parses query parameter values, converting strings to their appropriate types.
  * Handles boolean strings, numbers, and preserves regular strings.
@@ -114,6 +116,9 @@ export default function useQueryParams({
   const promptTextRef = useRef<string | null>(null);
   const validSettingsRef = useRef<TPreset | null>(null);
   const settingsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const ticketPromptRef = useRef<string | null>(null);
+  const ticketResolvingRef = useRef(false);
+  const ticketResolveFailedRef = useRef(false);
 
   const methods = useChatFormContext();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -124,9 +129,36 @@ export default function useQueryParams({
 
   const queryClient = useQueryClient();
   const { conversation, newConversation } = useChatContext();
+  const { isAuthenticated, token } = useAuthContext();
 
   const urlAgentId = searchParams.get('agent_id') || '';
   const { data: urlAgent } = useGetAgentByIdQuery(urlAgentId);
+
+  const resolveInsertTicket = useCallback(async (ticketId: string): Promise<string> => {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+
+    const response = await fetch('/api/prompthub/resolve-insert', {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: JSON.stringify({ ticketId }),
+    });
+
+    if (!response.ok) {
+      const errBody = await response.json().catch(() => ({}));
+      const message = errBody?.message ?? `Failed to resolve insert ticket (${response.status})`;
+      throw new Error(message);
+    }
+
+    const data = await response.json();
+    return typeof data?.content === 'string' ? data.content : '';
+  }, [token]);
 
   /**
    * Applies settings from URL query parameters to create a new conversation.
@@ -291,13 +323,15 @@ export default function useQueryParams({
 
       // Support both 'prompt' and 'q' as query parameters, with 'prompt' taking precedence
       const decodedPrompt = queryParams.prompt || queryParams.q || '';
+      const insertTicket = queryParams.insertTicket || '';
       const shouldAutoSubmit = queryParams.submit?.toLowerCase() === 'true';
       delete queryParams.prompt;
       delete queryParams.q;
+      delete queryParams.insertTicket;
       delete queryParams.submit;
       const validSettings = processValidSettings(queryParams);
 
-      return { decodedPrompt, validSettings, shouldAutoSubmit };
+      return { decodedPrompt, insertTicket, validSettings, shouldAutoSubmit };
     };
 
     const intervalId = setInterval(() => {
@@ -319,7 +353,72 @@ export default function useQueryParams({
         return;
       }
 
-      const { decodedPrompt, validSettings, shouldAutoSubmit } = processQueryParams();
+      const { decodedPrompt: directPrompt, insertTicket, validSettings, shouldAutoSubmit } =
+        processQueryParams();
+
+      if (insertTicket) {
+        try {
+          localStorage.setItem(
+            PENDING_INSERT_STORAGE_KEY,
+            JSON.stringify({
+              ticketId: insertTicket,
+              submit: shouldAutoSubmit ? 'true' : 'false',
+            }),
+          );
+        } catch (_error) {
+          // Ignore local storage failures and continue processing.
+        }
+      }
+
+      let decodedPrompt = directPrompt;
+      let effectiveInsertTicket = insertTicket;
+
+      if (!effectiveInsertTicket) {
+        try {
+          const pendingRaw = localStorage.getItem(PENDING_INSERT_STORAGE_KEY);
+          if (pendingRaw) {
+            const pending = JSON.parse(pendingRaw) as { ticketId?: string };
+            if (pending?.ticketId) {
+              effectiveInsertTicket = pending.ticketId;
+            }
+          }
+        } catch (_error) {
+          // Ignore local storage parse failures.
+        }
+      }
+
+      if (!decodedPrompt && effectiveInsertTicket) {
+        if (!isAuthenticated) {
+          return;
+        }
+
+        if (ticketResolveFailedRef.current) {
+          processedRef.current = true;
+          clearInterval(intervalId);
+          return;
+        }
+
+        if (ticketPromptRef.current === null) {
+          if (!ticketResolvingRef.current) {
+            ticketResolvingRef.current = true;
+            resolveInsertTicket(effectiveInsertTicket)
+              .then((content) => {
+                ticketPromptRef.current = content;
+              })
+              .catch((error) => {
+                console.error('Failed to resolve insert ticket:', error);
+                ticketResolveFailedRef.current = true;
+              })
+              .finally(() => {
+                ticketResolvingRef.current = false;
+              });
+          }
+
+          return;
+        }
+
+        decodedPrompt = ticketPromptRef.current;
+      }
 
       if (!shouldAutoSubmit) {
         submissionHandledRef.current = true;
@@ -331,7 +430,14 @@ export default function useQueryParams({
         const currentParams = new URLSearchParams(paramString);
         currentParams.delete('prompt');
         currentParams.delete('q');
+        currentParams.delete('insertTicket');
         currentParams.delete('submit');
+
+        try {
+          localStorage.removeItem(PENDING_INSERT_STORAGE_KEY);
+        } catch (_error) {
+          // Ignore local storage failures.
+        }
 
         setSearchParams(currentParams, { replace: true });
         processedRef.current = true;
@@ -412,6 +518,8 @@ export default function useQueryParams({
     setSearchParams,
     queryClient,
     processSubmission,
+    isAuthenticated,
+    resolveInsertTicket,
   ]);
 
   useEffect(() => {
@@ -443,7 +551,6 @@ export default function useQueryParams({
     }
   }, [conversation, processSubmission, areSettingsApplied]);
 
-  const { isAuthenticated } = useAuthContext();
   const agentsMap = useAgentsMap({ isAuthenticated });
   useEffect(() => {
     if (urlAgent) {

@@ -33,9 +33,14 @@ function TestComponent() {
  * Creates a test router with optional basename to verify navigation works correctly
  * with subdirectory deployments (e.g., /librechat)
  */
-const createTestRouter = (basename = '/') => {
+const createTestRouter = (basename = '/', initialEntryOverride?: string) => {
   // When using basename, initialEntries must include the basename
-  const initialEntry = basename === '/' ? '/' : `${basename}/`;
+  const initialEntry =
+    initialEntryOverride != null
+      ? initialEntryOverride
+      : basename === '/'
+        ? '/'
+        : `${basename}/`;
 
   return createMemoryRouter(
     [
@@ -58,11 +63,13 @@ const createTestRouter = (basename = '/') => {
 describe('useAuthRedirect', () => {
   beforeEach(() => {
     (window as any).__testResult = undefined;
+    window.localStorage.clear();
   });
 
   afterEach(() => {
     jest.clearAllMocks();
     (window as any).__testResult = undefined;
+    window.localStorage.clear();
   });
 
   it('should not redirect when user is authenticated', async () => {
@@ -198,5 +205,26 @@ describe('useAuthRedirect', () => {
       expect(testResult.user).toEqual(mockUser);
       expect(testResult.isAuthenticated).toBe(true);
     });
+  });
+
+  it('should persist insert ticket query params before redirecting to login', async () => {
+    (useAuthContext as jest.Mock).mockReturnValue({
+      user: null,
+      isAuthenticated: false,
+    });
+
+    const router = createTestRouter('/', '/?insertTicket=ticket-abc123&submit=true');
+    render(<RouterProvider router={router} />);
+
+    await waitFor(
+      () => {
+        expect(router.state.location.pathname).toBe('/login');
+      },
+      { timeout: 1000 },
+    );
+
+    const pending = window.localStorage.getItem('prompthub_pending_insert');
+    expect(pending).toContain('ticket-abc123');
+    expect(pending).toContain('true');
   });
 });

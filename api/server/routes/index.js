@@ -26,9 +26,11 @@ const edit = require('./edit');
 const keys = require('./keys');
 const user = require('./user');
 const mcp = require('./mcp');
+const prompthub = require('./prompthub');
 
 module.exports = {
   mcp,
+  prompthub,
   edit,
   auth,
   keys,

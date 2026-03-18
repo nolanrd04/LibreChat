@@ -129,6 +129,12 @@ describe('useQueryParams', () => {
   // Setup common mocks before each test
   beforeEach(() => {
     jest.useFakeTimers();
+    window.localStorage.clear();
+
+    (global as any).fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ content: 'resolved prompt from ticket' }),
+    });
 
     // Reset mock for window.history.replaceState
     jest.spyOn(window.history, 'replaceState').mockClear();
@@ -190,6 +196,7 @@ describe('useQueryParams', () => {
     const { useAuthContext } = jest.requireMock('~/hooks/AuthContext');
     (useAuthContext as jest.Mock).mockReturnValue({
       user: { id: 'test-user-id' },
+      token: 'test-jwt-token',
       isAuthenticated: true,
     });
   });
@@ -197,6 +204,7 @@ describe('useQueryParams', () => {
   afterEach(() => {
     jest.clearAllMocks();
     jest.useRealTimers();
+    window.localStorage.clear();
   });
 
   // Helper function to set URL parameters for testing
@@ -530,5 +538,219 @@ describe('useQueryParams', () => {
     expect(mockHandleSubmit).not.toHaveBeenCalled();
     expect(mockSubmitMessage).not.toHaveBeenCalled();
     expect(window.history.replaceState).toHaveBeenCalled();
+  });
+
+  it('should resolve insertTicket and populate prompt text', async () => {
+    const mockSetValue = jest.fn();
+    const mockTextAreaRef = {
+      current: {
+        focus: jest.fn(),
+        setSelectionRange: jest.fn(),
+      } as unknown as HTMLTextAreaElement,
+    };
+
+    (useChatFormContext as jest.Mock).mockReturnValue({
+      setValue: mockSetValue,
+      getValues: jest.fn().mockReturnValue(''),
+      handleSubmit: jest.fn((callback) => () => callback({ text: 'test message' })),
+    });
+
+    (useQueryClient as jest.Mock).mockReturnValue({
+      getQueryData: jest.fn().mockImplementation((key) => {
+        if (key === 'startupConfig' || (Array.isArray(key) && key[0] === 'startupConfig')) {
+          return { modelSpecs: { list: [] } };
+        }
+        return null;
+      }),
+    });
+
+    setUrlParams({ insertTicket: 'ticket-1234567890' });
+
+    renderHook(() => useQueryParams({ textAreaRef: mockTextAreaRef }));
+
+    await act(async () => {
+      jest.advanceTimersByTime(100);
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      jest.advanceTimersByTime(100);
+      await Promise.resolve();
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/prompthub/resolve-insert',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer test-jwt-token',
+        }),
+      }),
+    );
+    expect(mockSetValue).toHaveBeenCalledWith(
+      'text',
+      'resolved prompt from ticket',
+      expect.objectContaining({ shouldValidate: true }),
+    );
+  });
+
+  it('should recover pending insertTicket from localStorage and clear it after success', async () => {
+    const mockSetValue = jest.fn();
+    const mockTextAreaRef = {
+      current: {
+        focus: jest.fn(),
+        setSelectionRange: jest.fn(),
+      } as unknown as HTMLTextAreaElement,
+    };
+
+    window.localStorage.setItem(
+      'prompthub_pending_insert',
+      JSON.stringify({ ticketId: 'stored-ticket-id', submit: 'false' }),
+    );
+
+    (useChatFormContext as jest.Mock).mockReturnValue({
+      setValue: mockSetValue,
+      getValues: jest.fn().mockReturnValue(''),
+      handleSubmit: jest.fn((callback) => () => callback({ text: 'test message' })),
+    });
+
+    (useQueryClient as jest.Mock).mockReturnValue({
+      getQueryData: jest.fn().mockImplementation((key) => {
+        if (key === 'startupConfig' || (Array.isArray(key) && key[0] === 'startupConfig')) {
+          return { modelSpecs: { list: [] } };
+        }
+        return null;
+      }),
+    });
+
+    setUrlParams({});
+
+    renderHook(() => useQueryParams({ textAreaRef: mockTextAreaRef }));
+
+    await act(async () => {
+      jest.advanceTimersByTime(100);
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      jest.advanceTimersByTime(100);
+      await Promise.resolve();
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/prompthub/resolve-insert',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer test-jwt-token',
+        }),
+      }),
+    );
+    expect(mockSetValue).toHaveBeenCalledWith(
+      'text',
+      'resolved prompt from ticket',
+      expect.objectContaining({ shouldValidate: true }),
+    );
+    expect(window.localStorage.getItem('prompthub_pending_insert')).toBeNull();
+  });
+
+  it('should persist insertTicket while unauthenticated and defer resolution', () => {
+    const mockSetValue = jest.fn();
+    const mockTextAreaRef = {
+      current: {
+        focus: jest.fn(),
+        setSelectionRange: jest.fn(),
+      } as unknown as HTMLTextAreaElement,
+    };
+
+    const { useAuthContext } = jest.requireMock('~/hooks/AuthContext');
+    (useAuthContext as jest.Mock).mockReturnValue({
+      user: null,
+      isAuthenticated: false,
+    });
+
+    (useChatFormContext as jest.Mock).mockReturnValue({
+      setValue: mockSetValue,
+      getValues: jest.fn().mockReturnValue(''),
+      handleSubmit: jest.fn((callback) => () => callback({ text: 'test message' })),
+    });
+
+    (useQueryClient as jest.Mock).mockReturnValue({
+      getQueryData: jest.fn().mockImplementation((key) => {
+        if (key === 'startupConfig' || (Array.isArray(key) && key[0] === 'startupConfig')) {
+          return { modelSpecs: { list: [] } };
+        }
+        return null;
+      }),
+    });
+
+    setUrlParams({ insertTicket: 'ticket-deferred' });
+
+    renderHook(() => useQueryParams({ textAreaRef: mockTextAreaRef }));
+
+    act(() => {
+      jest.advanceTimersByTime(100);
+    });
+
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(mockSetValue).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem('prompthub_pending_insert')).toContain('ticket-deferred');
+  });
+
+  it('should keep pending insertTicket when ticket resolution fails', async () => {
+    const mockSetValue = jest.fn();
+    const mockTextAreaRef = {
+      current: {
+        focus: jest.fn(),
+        setSelectionRange: jest.fn(),
+      } as unknown as HTMLTextAreaElement,
+    };
+
+    (global as any).fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: async () => ({ message: 'PROMPTHUB_API_URL is not configured' }),
+    });
+
+    (useChatFormContext as jest.Mock).mockReturnValue({
+      setValue: mockSetValue,
+      getValues: jest.fn().mockReturnValue(''),
+      handleSubmit: jest.fn((callback) => () => callback({ text: 'test message' })),
+    });
+
+    (useQueryClient as jest.Mock).mockReturnValue({
+      getQueryData: jest.fn().mockImplementation((key) => {
+        if (key === 'startupConfig' || (Array.isArray(key) && key[0] === 'startupConfig')) {
+          return { modelSpecs: { list: [] } };
+        }
+        return null;
+      }),
+    });
+
+    setUrlParams({ insertTicket: 'ticket-failure' });
+
+    renderHook(() => useQueryParams({ textAreaRef: mockTextAreaRef }));
+
+    await act(async () => {
+      jest.advanceTimersByTime(100);
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      jest.advanceTimersByTime(100);
+      await Promise.resolve();
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/prompthub/resolve-insert',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer test-jwt-token',
+        }),
+      }),
+    );
+    expect(mockSetValue).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem('prompthub_pending_insert')).toContain('ticket-failure');
   });
 });

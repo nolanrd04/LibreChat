@@ -146,6 +146,7 @@ const startServer = async () => {
 
   app.use('/api/tags', routes.tags);
   app.use('/api/mcp', routes.mcp);
+  app.use('/api/prompthub', routes.prompthub);
 
   app.use(ErrorController);
 

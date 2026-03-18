@@ -24,6 +24,29 @@ import { TAuthConfig, TUserContext, TAuthContext, TResError } from '~/common';
 import useTimeout from './useTimeout';
 import store from '~/store';
 
+const PENDING_INSERT_STORAGE_KEY = 'prompthub_pending_insert';
+
+const persistPendingInsertFromCurrentLocation = () => {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const insertTicket = params.get('insertTicket');
+    if (!insertTicket) {
+      return;
+    }
+
+    const submit = params.get('submit')?.toLowerCase() === 'true' ? 'true' : 'false';
+    localStorage.setItem(
+      PENDING_INSERT_STORAGE_KEY,
+      JSON.stringify({
+        ticketId: insertTicket,
+        submit,
+      }),
+    );
+  } catch (_error) {
+    // Ignore URL parsing/localStorage errors and continue authentication flow.
+  }
+};
+
 const AuthContext = createContext<TAuthContext | undefined>(undefined);
 
 const AuthContextProvider = ({
@@ -86,11 +109,27 @@ const AuthContextProvider = ({
         return;
       }
       setError(undefined);
-      setUserContext({ token, isAuthenticated: true, user, redirect: '/c/new' });
+
+      let redirect = '/c/new';
+      try {
+        const pendingRaw = localStorage.getItem(PENDING_INSERT_STORAGE_KEY);
+        if (pendingRaw) {
+          const pending = JSON.parse(pendingRaw) as { ticketId?: string; submit?: string };
+          if (pending?.ticketId) {
+            const submit = pending.submit === 'true' ? 'true' : 'false';
+            redirect = `/c/new?insertTicket=${encodeURIComponent(pending.ticketId)}&submit=${submit}`;
+          }
+        }
+      } catch (_error) {
+        // Ignore local storage parse failures and fallback to default redirect.
+      }
+
+      setUserContext({ token, isAuthenticated: true, user, redirect });
     },
     onError: (error: TResError | unknown) => {
       const resError = error as TResError;
       doSetError(resError.message);
+      persistPendingInsertFromCurrentLocation();
       navigate('/login', { replace: true });
     },
   });
@@ -146,6 +185,7 @@ const AuthContextProvider = ({
           if (authConfig?.test === true) {
             return;
           }
+          persistPendingInsertFromCurrentLocation();
           navigate('/login');
         }
       },
@@ -154,6 +194,7 @@ const AuthContextProvider = ({
         if (authConfig?.test === true) {
           return;
         }
+        persistPendingInsertFromCurrentLocation();
         navigate('/login');
       },
     });
@@ -164,6 +205,7 @@ const AuthContextProvider = ({
       setUser(userQuery.data);
     } else if (userQuery.isError) {
       doSetError((userQuery.error as Error).message);
+      persistPendingInsertFromCurrentLocation();
       navigate('/login', { replace: true });
     }
     if (error != null && error && isAuthenticated) {
