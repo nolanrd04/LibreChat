@@ -1,7 +1,11 @@
 import React, { useState, useMemo, memo } from 'react';
 import { useRecoilState } from 'recoil';
 import type { TConversation, TMessage, TFeedback } from 'librechat-data-provider';
+import { useToastContext } from '@librechat/client';
 import { EditIcon, Clipboard, CheckMark, ContinueIcon, RegenerateIcon } from '@librechat/client';
+import { Upload, ExternalLink } from 'lucide-react';
+import { NotificationSeverity } from '~/common';
+import { useAuthContext } from '~/hooks/AuthContext';
 import { useGenerationsByLatest, useLocalize } from '~/hooks';
 import { Fork } from '~/components/Conversations';
 import MessageAudio from './MessageAudio';
@@ -124,7 +128,11 @@ const HoverButtons = ({
   handleFeedback,
 }: THoverButtons) => {
   const localize = useLocalize();
+  const { showToast } = useToastContext();
+  const { token } = useAuthContext();
   const [isCopied, setIsCopied] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [promptHubUrl, setPromptHubUrl] = useState<string | null>(null);
   const [TextToSpeech] = useRecoilState<boolean>(store.textToSpeech);
 
   const endpoint = useMemo(() => {
@@ -183,6 +191,62 @@ const HoverButtons = ({
   };
 
   const handleCopy = () => copyToClipboard(setIsCopied);
+
+  const handleExport = async () => {
+    if (!message.messageId || isExporting) {
+      return;
+    }
+
+    setIsExporting(true);
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      }
+
+      const response = await fetch('/api/prompthub/export-message', {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body: JSON.stringify({ messageId: message.messageId }),
+      });
+
+      const rawBody = await response.text();
+      const data = (() => {
+        try {
+          return rawBody ? JSON.parse(rawBody) : {};
+        } catch (_error) {
+          return { message: rawBody || '' };
+        }
+      })();
+      if (!response.ok) {
+        throw new Error(data?.message || 'Unable to export message to PromptHub');
+      }
+
+      setPromptHubUrl(data?.prompthubUrl ?? null);
+      showToast({
+        message: 'Exported to PromptHub',
+        severity: NotificationSeverity.SUCCESS,
+      });
+    } catch (error) {
+      showToast({
+        message: error instanceof Error ? error.message : 'Unable to export message to PromptHub',
+        severity: NotificationSeverity.ERROR,
+      });
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const handleViewPromptHub = () => {
+    if (!promptHubUrl) {
+      return;
+    }
+    window.open(promptHubUrl, '_blank', 'noopener,noreferrer');
+  };
 
   return (
     <div className="group visible flex justify-center gap-0.5 self-end focus-within:outline-none lg:justify-start">
@@ -243,6 +307,27 @@ const HoverButtons = ({
       {/* Feedback Buttons */}
       {!isCreatedByUser && handleFeedback != null && (
         <Feedback handleFeedback={handleFeedback} feedback={message.feedback} isLast={isLast} />
+      )}
+
+      {!isCreatedByUser && (
+        <HoverButton
+          onClick={handleExport}
+          title={isExporting ? 'Exporting to PromptHub...' : 'Export to PromptHub'}
+          icon={<Upload size="19" />}
+          isLast={isLast}
+          isDisabled={isExporting}
+          className="active"
+        />
+      )}
+
+      {!isCreatedByUser && promptHubUrl && (
+        <HoverButton
+          onClick={handleViewPromptHub}
+          title={'View in PromptHub'}
+          icon={<ExternalLink size="19" />}
+          isLast={isLast}
+          className="active"
+        />
       )}
 
       {/* Regenerate Button */}
