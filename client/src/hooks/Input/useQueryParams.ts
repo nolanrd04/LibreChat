@@ -557,4 +557,45 @@ export default function useQueryParams({
       injectAgentIntoAgentsMap(queryClient, urlAgent);
     }
   }, [urlAgent, queryClient, agentsMap]);
+
+  /**
+   * Listens for insert ticket messages sent from PromptHub via window.postMessage.
+   * This allows PromptHub to insert a prompt into an already-open LibreChat tab
+   * instead of always opening a new one.
+   */
+  useEffect(() => {
+    const allowedOrigin = import.meta.env.VITE_PROMPTHUB_FRONTEND_URL as string | undefined;
+
+    const handleMessage = (event: MessageEvent) => {
+      if (allowedOrigin && event.origin !== allowedOrigin) {
+        return;
+      }
+
+      const { type, ticketId } = (event.data ?? {}) as { type?: string; ticketId?: string };
+      if (type !== 'PROMPTHUB_INSERT_TICKET' || !ticketId) {
+        return;
+      }
+
+      if (!isAuthenticated) {
+        console.warn('Received PromptHub insert ticket but user is not authenticated.');
+        return;
+      }
+
+      resolveInsertTicket(ticketId)
+        .then((content) => {
+          if (!content || !textAreaRef.current) {
+            return;
+          }
+          methods.setValue('text', content, { shouldValidate: true });
+          textAreaRef.current.focus();
+          textAreaRef.current.setSelectionRange(content.length, content.length);
+        })
+        .catch((error: unknown) => {
+          console.error('Failed to resolve insert ticket from postMessage:', error);
+        });
+    };
+
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, [isAuthenticated, resolveInsertTicket, methods, textAreaRef]);
 }
