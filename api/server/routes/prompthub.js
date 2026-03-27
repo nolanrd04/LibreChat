@@ -193,7 +193,8 @@ router.post('/export-message', requireJwtAuth, async (req, res) => {
         title,
         source_user_id: req.user?.id,
         source_user_email: req.user?.email,
-        source_user_name: req.user?.name ?? req.user?.username,
+        source_user_name: req.user?.name,
+        source_user_username: req.user?.username,
       },
       {
         timeout: 15000,
