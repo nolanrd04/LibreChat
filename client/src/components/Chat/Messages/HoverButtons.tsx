@@ -1,4 +1,8 @@
-import React, { useState, useMemo, memo } from 'react';
+// Last modified: 2026-04-03 by Nolan DeSchryver
+// 2026-04-03: Added useEffect to auto-fire PromptHub response callback on stream completion
+//             by Nolan DeSchryver and Claude (claude-sonnet-4-6)
+
+import React, { useState, useMemo, memo, useEffect } from 'react';
 import { useRecoilState } from 'recoil';
 import type { TConversation, TMessage, TFeedback } from 'librechat-data-provider';
 import { useToastContext } from '@librechat/client';
@@ -6,6 +10,7 @@ import { EditIcon, Clipboard, CheckMark, ContinueIcon, RegenerateIcon } from '@l
 import { Upload, ExternalLink } from 'lucide-react';
 import { NotificationSeverity } from '~/common';
 import { useAuthContext } from '~/hooks/AuthContext';
+import { usePromptHubInsertContext } from '~/Providers';
 import { useGenerationsByLatest, useLocalize } from '~/hooks';
 import { Fork } from '~/components/Conversations';
 import MessageAudio from './MessageAudio';
@@ -130,10 +135,39 @@ const HoverButtons = ({
   const localize = useLocalize();
   const { showToast } = useToastContext();
   const { token } = useAuthContext();
+  const { pendingCallbackToken, setPendingCallbackToken } = usePromptHubInsertContext();
   const [isCopied, setIsCopied] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [promptHubUrl, setPromptHubUrl] = useState<string | null>(null);
   const [TextToSpeech] = useRecoilState<boolean>(store.textToSpeech);
+
+  useEffect(() => {
+    if (message.isCreatedByUser || !isLast || isSubmitting || !pendingCallbackToken) {
+      return;
+    }
+
+    // Clear immediately to prevent double-fire.
+    setPendingCallbackToken(null);
+
+    const callbackToken = pendingCallbackToken;
+
+    (async () => {
+      try {
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (token) {
+          headers.Authorization = `Bearer ${token}`;
+        }
+        await fetch('/api/prompthub/response-callback', {
+          method: 'POST',
+          headers,
+          credentials: 'include',
+          body: JSON.stringify({ callbackToken, messageId: message.messageId }),
+        });
+      } catch (error) {
+        console.error('Failed to auto-save response to PromptHub:', error);
+      }
+    })();
+  }, [isLast, isSubmitting, message.isCreatedByUser, message.messageId, pendingCallbackToken, setPendingCallbackToken, token]);
 
   const endpoint = useMemo(() => {
     if (!conversation) {

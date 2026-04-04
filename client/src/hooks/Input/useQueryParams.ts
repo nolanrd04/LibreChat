@@ -19,9 +19,15 @@ import type {
 import type { ZodAny } from 'zod';
 import { getConvoSwitchLogic, getModelSpecIconURL, removeUnavailableTools, logger } from '~/utils';
 import { useAuthContext, useAgentsMap, useDefaultConvo, useSubmitMessage } from '~/hooks';
+import { usePromptHubInsertContext } from '~/Providers';
 import { useChatContext, useChatFormContext } from '~/Providers';
 import { useGetAgentByIdQuery } from '~/data-provider';
 import store from '~/store';
+
+// Last modified: 2026-04-03 by Nolan DeSchryver
+// 2026-04-03: resolveInsertTicket now returns { content, callbackToken };
+//             callback token stored in PromptHubInsertContext (not localStorage)
+//             by Nolan DeSchryver and Claude (claude-sonnet-4-6)
 
 const PENDING_INSERT_STORAGE_KEY = 'prompthub_pending_insert';
 
@@ -120,6 +126,8 @@ export default function useQueryParams({
   const ticketResolvingRef = useRef(false);
   const ticketResolveFailedRef = useRef(false);
 
+  const { setPendingCallbackToken } = usePromptHubInsertContext();
+
   const methods = useChatFormContext();
   const [searchParams, setSearchParams] = useSearchParams();
   const getDefaultConversation = useDefaultConvo();
@@ -134,31 +142,37 @@ export default function useQueryParams({
   const urlAgentId = searchParams.get('agent_id') || '';
   const { data: urlAgent } = useGetAgentByIdQuery(urlAgentId);
 
-  const resolveInsertTicket = useCallback(async (ticketId: string): Promise<string> => {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
+  const resolveInsertTicket = useCallback(
+    async (ticketId: string): Promise<{ content: string; callbackToken: string | null }> => {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
 
-    if (token) {
-      headers.Authorization = `Bearer ${token}`;
-    }
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      }
 
-    const response = await fetch('/api/prompthub/resolve-insert', {
-      method: 'POST',
-      headers,
-      credentials: 'include',
-      body: JSON.stringify({ ticketId }),
-    });
+      const response = await fetch('/api/prompthub/resolve-insert', {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body: JSON.stringify({ ticketId }),
+      });
 
-    if (!response.ok) {
-      const errBody = await response.json().catch(() => ({}));
-      const message = errBody?.message ?? `Failed to resolve insert ticket (${response.status})`;
-      throw new Error(message);
-    }
+      if (!response.ok) {
+        const errBody = await response.json().catch(() => ({}));
+        const message = errBody?.message ?? `Failed to resolve insert ticket (${response.status})`;
+        throw new Error(message);
+      }
 
-    const data = await response.json();
-    return typeof data?.content === 'string' ? data.content : '';
-  }, [token]);
+      const data = await response.json();
+      return {
+        content: typeof data?.content === 'string' ? data.content : '',
+        callbackToken: typeof data?.callbackToken === 'string' ? data.callbackToken : null,
+      };
+    },
+    [token],
+  );
 
   /**
    * Applies settings from URL query parameters to create a new conversation.
@@ -402,8 +416,11 @@ export default function useQueryParams({
           if (!ticketResolvingRef.current) {
             ticketResolvingRef.current = true;
             resolveInsertTicket(effectiveInsertTicket)
-              .then((content) => {
+              .then(({ content, callbackToken }) => {
                 ticketPromptRef.current = content;
+                if (callbackToken) {
+                  setPendingCallbackToken(callbackToken);
+                }
               })
               .catch((error) => {
                 console.error('Failed to resolve insert ticket:', error);
@@ -520,6 +537,7 @@ export default function useQueryParams({
     processSubmission,
     isAuthenticated,
     resolveInsertTicket,
+    setPendingCallbackToken,
   ]);
 
   useEffect(() => {
@@ -582,13 +600,16 @@ export default function useQueryParams({
       }
 
       resolveInsertTicket(ticketId)
-        .then((content) => {
+        .then(({ content, callbackToken }) => {
           if (!content || !textAreaRef.current) {
             return;
           }
           methods.setValue('text', content, { shouldValidate: true });
           textAreaRef.current.focus();
           textAreaRef.current.setSelectionRange(content.length, content.length);
+          if (callbackToken) {
+            setPendingCallbackToken(callbackToken);
+          }
         })
         .catch((error: unknown) => {
           console.error('Failed to resolve insert ticket from postMessage:', error);

@@ -1,3 +1,7 @@
+// Last modified: 2026-04-03 by Nolan DeSchryver
+// 2026-04-03: Wrapped with PromptHubInsertProvider for scoped callback token state
+//             by Nolan DeSchryver and Claude (claude-sonnet-4-6)
+
 import { memo, useCallback } from 'react';
 import { useRecoilValue } from 'recoil';
 import { useForm } from 'react-hook-form';
@@ -6,7 +10,13 @@ import { useParams } from 'react-router-dom';
 import { Constants, buildTree } from 'librechat-data-provider';
 import type { TMessage } from 'librechat-data-provider';
 import type { ChatFormValues } from '~/common';
-import { ChatContext, AddedChatContext, useFileMapContext, ChatFormProvider } from '~/Providers';
+import {
+  ChatContext,
+  AddedChatContext,
+  useFileMapContext,
+  ChatFormProvider,
+  PromptHubInsertProvider,
+} from '~/Providers';
 import { useChatHelpers, useAddedResponse, useSSE, useMCPSelect } from '~/hooks';
 import ConversationStarters from './Input/ConversationStarters';
 import { useGetMessagesByConvoId } from '~/data-provider';
@@ -79,6 +89,7 @@ function ChatView({ index = 0 }: { index?: number }) {
 
   return (
     <ChatFormProvider {...methods}>
+      <PromptHubInsertProvider>
       <ChatContext.Provider value={chatHelpers}>
         <AddedChatContext.Provider value={addedChatHelpers}>
           <Presentation>
@@ -110,6 +121,7 @@ function ChatView({ index = 0 }: { index?: number }) {
           </Presentation>
         </AddedChatContext.Provider>
       </ChatContext.Provider>
+      </PromptHubInsertProvider>
     </ChatFormProvider>
   );
 }
