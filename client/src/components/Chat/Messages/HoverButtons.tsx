@@ -2,7 +2,7 @@
 // 2026-04-03: Added useEffect to auto-fire PromptHub response callback on stream completion
 //             by Nolan DeSchryver and Claude (claude-sonnet-4-6)
 
-import React, { useState, useMemo, memo, useEffect } from 'react';
+import React, { useState, useMemo, memo, useEffect, useRef } from 'react';
 import { useRecoilState } from 'recoil';
 import type { TConversation, TMessage, TFeedback } from 'librechat-data-provider';
 import { useToastContext } from '@librechat/client';
@@ -135,21 +135,39 @@ const HoverButtons = ({
   const localize = useLocalize();
   const { showToast } = useToastContext();
   const { token } = useAuthContext();
-  const { pendingCallbackToken, setPendingCallbackToken } = usePromptHubInsertContext();
+  const { pendingCallbackToken, pendingVersionId, setPendingCallbackToken } = usePromptHubInsertContext();
   const [isCopied, setIsCopied] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [promptHubUrl, setPromptHubUrl] = useState<string | null>(null);
   const [TextToSpeech] = useRecoilState<boolean>(store.textToSpeech);
+  const callbackSentRef = useRef<string | null>(null);
+  const lastCallbackMessageIdRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (message.isCreatedByUser || !isLast || isSubmitting || !pendingCallbackToken) {
+    if (message.isCreatedByUser || !isLast || isSubmitting || !pendingCallbackToken || !pendingVersionId) {
       return;
     }
 
-    // Clear immediately to prevent double-fire.
+    // Prevent duplicate sends: only send once per callback token
+    if (callbackSentRef.current === pendingCallbackToken) {
+      return;
+    }
+
+    // Prevent sending callback for old responses when re-inserting the same prompt.
+    // Only send if this is a NEW message (different from last callback message).
+    if (lastCallbackMessageIdRef.current === message.messageId) {
+      return;
+    }
+
+    // Mark this callback token as sent and track the message ID
+    callbackSentRef.current = pendingCallbackToken;
+    lastCallbackMessageIdRef.current = message.messageId;
+
+    // Clear immediately to prevent re-entry.
     setPendingCallbackToken(null);
 
     const callbackToken = pendingCallbackToken;
+    const versionId = pendingVersionId;
 
     (async () => {
       try {
@@ -161,13 +179,13 @@ const HoverButtons = ({
           method: 'POST',
           headers,
           credentials: 'include',
-          body: JSON.stringify({ callbackToken, messageId: message.messageId }),
+          body: JSON.stringify({ callbackToken, messageId: message.messageId, versionId }),
         });
-      } catch (error) {
-        console.error('Failed to auto-save response to PromptHub:', error);
+      } catch (_error) {
+        // Silently fail - response tracking is not critical to user experience
       }
     })();
-  }, [isLast, isSubmitting, message.isCreatedByUser, message.messageId, pendingCallbackToken, setPendingCallbackToken, token]);
+  }, [isLast, isSubmitting, message.isCreatedByUser, message.messageId, pendingCallbackToken, pendingVersionId, setPendingCallbackToken, token]);
 
   const endpoint = useMemo(() => {
     if (!conversation) {

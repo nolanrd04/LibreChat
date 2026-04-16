@@ -8,19 +8,27 @@ import type { ReactNode } from 'react';
 
 type TPromptHubInsertContext = {
   pendingCallbackToken: string | null;
-  setPendingCallbackToken: (token: string | null) => void;
+  pendingVersionId: number | null;
+  setPendingCallbackToken: (token: string | null, versionId?: number | null) => void;
 };
 
 const PromptHubInsertContext = createContext<TPromptHubInsertContext>({
   pendingCallbackToken: null,
+  pendingVersionId: null,
   setPendingCallbackToken: () => undefined,
 });
 
 export function PromptHubInsertProvider({ children }: { children: ReactNode }) {
-  const [pendingCallbackToken, setPendingCallbackToken] = useState<string | null>(null);
+  const [pendingCallbackToken, setPendingCallbackTokenState] = useState<string | null>(null);
+  const [pendingVersionId, setPendingVersionIdState] = useState<number | null>(null);
+
+  const setPendingCallbackToken = (token: string | null, versionId: number | null = null) => {
+    setPendingCallbackTokenState(token);
+    setPendingVersionIdState(versionId);
+  };
 
   return (
-    <PromptHubInsertContext.Provider value={{ pendingCallbackToken, setPendingCallbackToken }}>
+    <PromptHubInsertContext.Provider value={{ pendingCallbackToken, pendingVersionId, setPendingCallbackToken }}>
       {children}
     </PromptHubInsertContext.Provider>
   );

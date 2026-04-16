@@ -263,13 +263,16 @@ router.post('/export-message', requireJwtAuth, async (req, res) => {
 });
 
 router.post('/response-callback', requireJwtAuth, async (req, res) => {
-  const { callbackToken, messageId } = req.body ?? {};
+  const { callbackToken, messageId, versionId } = req.body ?? {};
 
   if (!callbackToken || typeof callbackToken !== 'string') {
     return res.status(400).json({ message: 'callbackToken is required' });
   }
   if (!messageId || typeof messageId !== 'string') {
     return res.status(400).json({ message: 'messageId is required' });
+  }
+  if (!versionId || typeof versionId !== 'number') {
+    return res.status(400).json({ message: 'versionId is required and must be a number' });
   }
 
   const resolverSecret = process.env.PROMPTHUB_INSERT_RESOLVE_SECRET;
@@ -302,6 +305,7 @@ router.post('/response-callback', requireJwtAuth, async (req, res) => {
       {
         callback_token: callbackToken,
         response_text: responseText,
+        version_id: versionId,
       },
       {
         timeout: 10000,

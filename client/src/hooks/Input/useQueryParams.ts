@@ -64,8 +64,8 @@ const processValidSettings = (queryParams: Record<string, string>) => {
         const validValue = schema.parse(parsedValue);
         validSettings[key] = validValue;
       }
-    } catch (error) {
-      console.warn(`Invalid value for setting ${key}:`, error);
+    } catch (_error) {
+      // Silently skip invalid settings
     }
   });
 
@@ -143,7 +143,7 @@ export default function useQueryParams({
   const { data: urlAgent } = useGetAgentByIdQuery(urlAgentId);
 
   const resolveInsertTicket = useCallback(
-    async (ticketId: string): Promise<{ content: string; callbackToken: string | null }> => {
+    async (ticketId: string): Promise<{ content: string; callbackToken: string | null; versionId: number | null }> => {
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
       };
@@ -169,6 +169,7 @@ export default function useQueryParams({
       return {
         content: typeof data?.content === 'string' ? data.content : '',
         callbackToken: typeof data?.callbackToken === 'string' ? data.callbackToken : null,
+        versionId: typeof data?.versionId === 'number' ? data.versionId : null,
       };
     },
     [token],
@@ -322,8 +323,6 @@ export default function useQueryParams({
 
         const newUrl = window.location.pathname;
         window.history.replaceState({}, '', newUrl);
-
-        console.log('Message submitted with conversation state:', conversation);
       }
     })();
   }, [methods, submitMessage, conversation]);
@@ -351,9 +350,6 @@ export default function useQueryParams({
     const intervalId = setInterval(() => {
       if (processedRef.current || attemptsRef.current >= maxAttempts) {
         clearInterval(intervalId);
-        if (attemptsRef.current >= maxAttempts) {
-          console.warn('Max attempts reached, failed to process parameters');
-        }
         return;
       }
 
@@ -416,14 +412,13 @@ export default function useQueryParams({
           if (!ticketResolvingRef.current) {
             ticketResolvingRef.current = true;
             resolveInsertTicket(effectiveInsertTicket)
-              .then(({ content, callbackToken }) => {
+              .then(({ content, callbackToken, versionId }) => {
                 ticketPromptRef.current = content;
-                if (callbackToken) {
-                  setPendingCallbackToken(callbackToken);
+                if (callbackToken && versionId) {
+                  setPendingCallbackToken(callbackToken, versionId);
                 }
               })
-              .catch((error) => {
-                console.error('Failed to resolve insert ticket:', error);
+              .catch(() => {
                 ticketResolveFailedRef.current = true;
               })
               .finally(() => {
@@ -458,7 +453,6 @@ export default function useQueryParams({
 
         setSearchParams(currentParams, { replace: true });
         processedRef.current = true;
-        console.log('Parameters processed successfully', paramString);
         clearInterval(intervalId);
 
         // Only clean URL if there's no pending submission
@@ -487,9 +481,6 @@ export default function useQueryParams({
           // Set a timeout to handle the case where settings might never fully apply
           settingsTimeoutRef.current = setTimeout(() => {
             if (!submissionHandledRef.current && pendingSubmitRef.current) {
-              console.warn(
-                'Settings application timeout reached, proceeding with submission anyway',
-              );
               processSubmission();
             }
           }, MAX_SETTINGS_WAIT_MS);
@@ -563,7 +554,6 @@ export default function useQueryParams({
           settingsTimeoutRef.current = null;
         }
 
-        console.log('Settings fully applied, processing submission');
         processSubmission();
       }
     }
@@ -595,24 +585,23 @@ export default function useQueryParams({
       }
 
       if (!isAuthenticated) {
-        console.warn('Received PromptHub insert ticket but user is not authenticated.');
         return;
       }
 
       resolveInsertTicket(ticketId)
-        .then(({ content, callbackToken }) => {
+        .then(({ content, callbackToken, versionId }) => {
           if (!content || !textAreaRef.current) {
             return;
           }
           methods.setValue('text', content, { shouldValidate: true });
           textAreaRef.current.focus();
           textAreaRef.current.setSelectionRange(content.length, content.length);
-          if (callbackToken) {
-            setPendingCallbackToken(callbackToken);
+          if (callbackToken && versionId) {
+            setPendingCallbackToken(callbackToken, versionId);
           }
         })
-        .catch((error: unknown) => {
-          console.error('Failed to resolve insert ticket from postMessage:', error);
+        .catch(() => {
+          // Silently fail - ticket resolution is not critical
         });
     };
 
